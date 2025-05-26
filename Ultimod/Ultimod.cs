@@ -1,8 +1,9 @@
-﻿using MelonLoader;
+using MelonLoader;
 using HarmonyLib;
 using Il2Cpp;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using UnityEngine.SceneManagement;
 
 [assembly: MelonInfo(typeof(Ultimod.Ultimod), "Ultimod", "0.1", "IceandFire04")] // This is where you put your mod info. Theres also an optional download link.
 [assembly: MelonGame("fiveamp", "PickCrafter")] // For some reason, FiveAmp is lowercase here.
@@ -11,12 +12,11 @@ namespace Ultimod;
 
 public class Ultimod : MelonMod
 {
-    public bool AllPickaxesUnlocked = false; // This is a variable that can be used to toggle the unlocking of all pickaxes.
     public bool PickaxeTextVisible = false; // This is a variable that can be used to toggle the visibility of the pickaxe text.
 
     public override void OnInitializeMelon()
     {
-        // These two lines let us modify the game instead of just adding new stuff.
+        // These two lines allow use to use the patches at the bottom of the file.
         var Harmony = new HarmonyLib.Harmony("com.iceandfire04.pickcrafter.ultimod");
         Harmony.PatchAll(); // Apply patches.
 
@@ -25,6 +25,7 @@ public class Ultimod : MelonMod
 
     public override void OnLateUpdate()
     {
+        PickaxeController? pc = PickCrafterUtils.GetPickaxeController(); // Get the pickaxe controller.
 
         if (Input.GetKeyDown(KeyCode.F1)) // Press F1 to check for pickaxe controllers.
         {
@@ -49,24 +50,50 @@ public class Ultimod : MelonMod
 
         if (Input.GetKeyDown(KeyCode.F3))
         {
-            var cc = Object.FindObjectOfType<ChestController>(); // Get the chest controller.
-            if (cc && cc != null)
-                foreach (ChestData? cd in cc.chestDatas)
-                {
-                    if (cd != null)
-                    {
-                        cd.chestEntity.chestDropData.UNLOCK_DURATION = 0;
-                        cd.OpenChest();
-                    }
-                }
+            pc!.setActivePickaxe(pc!.GetBestPickaxe()); // Set the active pickaxe to the best one.
+            PickaxeGO_Controller.pickaxeGameObjectSwap(pc!.ActivePickaxe, new(180f, 180f, 180f));
         }
 
         if (Input.GetKeyDown(KeyCode.F4))
         {
-            RunicDust rd = Object.FindObjectOfType<RunicDust>();
+            RunicDust rd = Object.FindObjectOfType<RunicDust>(); // Get the runic dust controller.
             rd.Award(15, RunicDust.RunicRewardOrigins.RunicMachine);
         }
 
+        if (Input.GetKeyDown(KeyCode.F5))
+        {
+            pc!.UpgradePickaxe(pc!.ActivePickaxe, pc!.ActivePickaxe.maxLevel, true); // Upgrade the active pickaxe.
+
+        }
+
+        // This code always triggers in-game.
+        if (SceneManager.GetActiveScene().name == "DefaultScene")
+        {
+            // This bit of code sets all chests to be ready and automatically opens them.
+            var cc = Object.FindObjectOfType<ChestController>(); // Get the chest controller.
+
+            if (cc && cc != null) // Make sure it actually exists.
+            {
+                foreach (ChestData? cd in cc.chestDatas) // Loop through all the chest data.
+                {
+                    if (cd != null) // If the chest data isn't null.
+                    {
+                        // When modifying chests, use ChestSlotSaveData to modify the chest enitity, time left, etc.
+                        ChestSlotSaveData? csd = cd.chestSlotSaveData; // Get the chest slot save data.
+                        if (csd.chestState != ChestData.ChestState.Empty) // Make sure it's not an empty slot so errors don't get spammed.
+                        {
+                            csd.chestState = ChestData.ChestState.Ready; // Ready the chest.
+                            cd.OpenChest(); // Automatically open the chest.
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public override void OnSceneWasLoaded(int buildIndex, string sceneName)
+    {
+        Melon<Ultimod>.Logger.Msg($"Scene loaded: {sceneName}"); // Log the scene name.
     }
 
     public static void DrawPickaxeText()
@@ -81,37 +108,40 @@ public class Ultimod : MelonMod
     }
 }
 
-public class PickCrafterUtils
+public static class PickCrafterUtils
 {
     public static void FindPickaxeControllers()
     {
         Melon<Ultimod>.Logger.Msg($"Finding PickaxeControllers..."); // Log the scene name.
-        foreach (PickaxeController pc in Object.FindObjectsOfType<PickaxeController>())
+        foreach (PickaxeController pc in Object.FindObjectsOfType<PickaxeController>()) // Loop through all the pickaxe controllers.
         {
+            // Log info about them.
             Melon<Ultimod>.Logger.Msg($"Found Pickaxe Controller {pc.name} with ActivePickaxe {pc.ActivePickaxe.name} (Parent \"{pc.gameObject.GetParent()}\")");
         }
-        Melon<Ultimod>.Logger.Msg($"Found {Object.FindObjectsOfType<PickaxeController>().Length} Pickaxe Controllers in current scene.");
+        Melon<Ultimod>.Logger.Msg($"Found {Object.FindObjectsOfType<PickaxeController>().Length} Pickaxe Controllers in current scene."); // Say when done.
     }
 
     public static PickaxeController? GetPickaxeController()
     {
-        var pc = Object.FindObjectOfType<PickaxeController>();
+        var pc = Object.FindObjectOfType<PickaxeController>(); // Get the first pickaxe controller in the scene.
 
-        if (pc) return pc;
-        else return null;
+        if (pc) return pc; // If it exists, return it.
+        else return null; // Elsewise, return null.
     }
 }
 
 #region patches
+
 // This line denotes the start of a patch. It needs the class the function is apart of and the name of it.
+// The MelonLoader wiki goes into more detail.
 [HarmonyPatch(typeof(PickaxeController), nameof(PickaxeController.IsUnlocked))]
 public class UnlockPickaxes // The name can be anything.
 {
     // Prefix() runs before the original function.
     static bool Prefix(ref bool __result)
     {
-        __result = true;
-        return false;
+        __result = true; // Always return true, meaning any pickaxe is unlocked.
+        return false; // Don't run the original function.
     }
 
     // Postfix() runs after the original function.
@@ -121,18 +151,20 @@ public class UnlockPickaxes // The name can be anything.
     }
 }
 
-// This patch is pretty simple: every pickaxe is shown.
+// This patch is pretty simple: every pickaxe is shown, even if from a higher prestige.
 [HarmonyPatch(typeof(PickaxeController), nameof(PickaxeController.GetIsHidden))]
 public class ShowHiddenPickaxes
 {
     static bool Prefix(ref bool __result)
     {
-        __result = false;
+        __result = false; // Same deal as last time.
         return false;
     }
 }
 
 // This patch is a little more complicated. I'll try my best to break it down.
+// Since every pickaxe is pseudo-unlocked, it reads garbage values for the pickaxe's base damage.
+// However, pickaxes' base damage is still stored in the game, just somewhere else.
 [HarmonyPatch(typeof(PickaxeController), nameof(PickaxeController.GetDamage))]
 public class CorrectPickaxeDamage
 {
@@ -140,6 +172,9 @@ public class CorrectPickaxeDamage
     {
         PickaxeController? pc = PickCrafterUtils.GetPickaxeController(); // Get the pickaxe controller.
         PickaxeData activePickaxe = pc!.ActivePickaxe; // Get the active pickaxe.
+
+        // If the pickaxe is a vanity pickaxe, we use the best pickaxe's base damage since vanity pickaxes all have 0 damage.
+        // Else, just use the real base damage of the pickaxe.
         __result = activePickaxe.isVanity ? pc.GetBestPickaxe().baseDamage : pc!.GetPickaxe(activePickaxe.id).baseDamage;
         return false;
     }
@@ -152,8 +187,18 @@ public class ShortPowerCooldowns
 {
     static bool Prefix(ref float __result)
     {
-        __result = 10f;
+        __result = 10f; // Here we just set the cooldown to 10 seconds.
         return false;
+    }
+}
+
+[HarmonyPatch(typeof(PickaxeController), nameof(PickaxeController.IsUpgradableNow))]
+public class AlwaysUpgradable
+{
+    static bool Prefix(ref bool __result)
+    {
+        __result = true; // Always return true, meaning the pickaxe is always upgradable.
+        return false; // Don't run the original function.
     }
 }
 #endregion
